@@ -1,3 +1,4 @@
+// Author: Alan MacLeod, Sep 2016
 (function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.Huffman = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 
 module.exports = Huffman;
@@ -28,29 +29,33 @@ function Huffman()
 
         bw.finish();
 
-        var bwtree = new BinaryWriter(4096);
+        var bwtree = new BinaryWriter(4096); // FIXME, can we predict the tree size beforehand?
 
         this._serialiseNode(this.root, bwtree);
 
         bwtree.finish(); // VERY IMPORTANT!
         bwtree.prune();
 
-        var catArray = new Uint8Array(bwtree.buffer.byteLength + bw.buffer.byteLength+2);
-        catArray.set(new Uint8Array(bwtree.buffer),0+2);
-        catArray.set(new Uint8Array(bw.buffer), bwtree.buffer.byteLength+2);
+        var headerSize = 8; // two 32-bit vals for tree size (overkill) and original file size
+        var catArray = new Uint8Array(bwtree.buffer.byteLength + bw.buffer.byteLength+ headerSize);
+        catArray.set(new Uint8Array(bwtree.buffer),0+headerSize);
+        catArray.set(new Uint8Array(bw.buffer), bwtree.buffer.byteLength+headerSize);
 
-        var tmp = new Uint16Array(catArray);
-        tmp[0] = bwtree.buffer.byteLength;
+        var tmp = new Uint32Array(catArray);
+        tmp[0] = view.length;
+        tmp[1] = bwtree.buffer.byteLength;
 
         return tmp;
     };
 
-    this.decompress = function(org_size, slug)
+    this.decompress = function(slug)
     {
-        var tmp = new Uint16Array(slug);
+        var tmp = new Uint32Array(slug);
+        var org_size = tmp[0];
+        var tree_size = tmp[1];
         var databytes = new Uint8Array(slug);
-        var bintree = databytes.subarray(2, 2+tmp[0]);
-        var data = databytes.subarray(2+tmp[0]);
+        var bintree = databytes.subarray(8, 8+tree_size);
+        var data = databytes.subarray(8+tree_size);
 
         var br = new BinaryReader(bintree);
         var tree = this._deserialiseNode(br);
@@ -74,7 +79,7 @@ function Huffman()
         return bview;
     };
 
-
+    // This method takes a linear bunch of binary and deserialises it into our Huffman tree
     this._deserialiseNode = function(reader)
     {
         var bit = reader.readBit();
@@ -97,6 +102,8 @@ function Huffman()
 
     };
 
+    // This is a bit clever. Not only serialises the huffman tree, but also compresses it massively!
+    // Writes a binary '1' for leaf, '0' for node. Assumes traversal left -> right
     this._serialiseNode = function(node, writer)
     {
         if (node.symbol)
@@ -110,7 +117,7 @@ function Huffman()
         }
     };
 
-
+    // Symbol dictionary, has our minimalised binary form for every unique symbol in the source file
     this._buildDictionary = function(binstr, node)
     {
         if (node.symbol)
@@ -123,6 +130,9 @@ function Huffman()
             this._buildDictionary(binstr+'0', node.left);
     };
 
+    // After collecting symbols (in .freqAnalysis()) we build the tree from the ground up.
+    // First, sort symbols by frequency. Then choose the two lowest and merge them into a new Node
+    // Rinse, repeat.
     this._buildTree = function()
     {
         while (this._nodes.length > 1)
@@ -179,8 +189,9 @@ function Node(s, f)
     this.right = null;
 }
 
-
-
+// When we take our linear binary input stream, we immediately start walking the tree turning left or right if a 0 or 1
+// until we arrive at a leaf node, then just return that symbol - and that is how a variable length compressed symbol
+// is decoded.
 function HuffmanDecoder(root)
 {
     this.rootNode = root;
@@ -209,6 +220,7 @@ function HuffmanDecoder(root)
 
 }
 
+// Helper to allow direct manipulation of binary bits
 function BinaryReader(buffer)
 {
     this.bytes = new Uint8Array(buffer);
